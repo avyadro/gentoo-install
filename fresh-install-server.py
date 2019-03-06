@@ -106,6 +106,7 @@ def process():
 	print("** Creating SWAP filesystem")
 	cmd = "mkswap /dev/"+gentoo.lvm_vg
 	gentoo.shell(cmd)
+	
 	#echo -e "\t\t=> Activating the swap partition <="
 	#swapon /dev/gentoo/swapfs
 	#echo -e "\t=> Creating HOME filesystem /dev/gentoo/homefs (ext4) <="
