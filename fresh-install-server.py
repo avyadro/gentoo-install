@@ -1,22 +1,38 @@
+class TMap(object):
+	def __init__(self,key,value):
+		 self.key=key
+		 self.value=value
 class Map(object):
-     def __init__(self,key,value):
-         self.key=key
-         self.value=value
-         
+	def __init__(self):        
+			self.list = []
+	def put(self,key,value):
+			self.list.append(TMap(key,value))
+	def get(self,key):
+		for e in self.list:
+			if e.key == key:
+				return e                  
+	def list(self):
+		return self.list     
+
 class List(object):
      def __init__(self):
          """
          """ 
          self.list = []  
      def put(self,key,value):
-         self.list.append(Map(key,value))
+         self.list.append(TMap(key,value))
      def get(self,key):
          for e in self.list:
             if e.key == key:
               return e                  
      def list(self):
          return self.list
-         
+class TLV(object):
+    def __init__(self,name,size,fs):
+        self.name=name
+        self.size=size
+        self.fs=fs
+        
 class GentooInstall(object):
 
 	def __init__(self):		 
@@ -39,16 +55,16 @@ class GentooInstall(object):
 		##############
 		# LVM Schema #
 		##############
-		# Physical volume
-		self.lvm_pv=self.disk+"3" 
 		# Volume group
 		self.lvm_vg="gentoo"
 		# Logical volume
-		_lvms = List()
-		_lvms.put('swapfs','-L 8G')
-		_lvms.put('homefs','-L 8G')
-		_lvms.put('rootfs','-l 100%VG')
-		self.lvms = _lvms.list
+		#self.lvms = List()
+		self.lvms = Map()
+		self.lvms.put('swap', TLV('swapfs','-L 8G','swap') )
+		self.lvms.put('home', TLV('homefs','-L 8G','fs.ext4') )
+		self.lvms.put('root', TLV('rootfs','-l 100%VG','fs.ext4') )
+		# Stage
+		self.stage="http://distfiles.gentoo.org/releases/amd64/autobuilds/current-stage3-amd64/stage3-amd64-20190305T214502Z.tar.xz"
 	def shell(self,cmd):
 		print(cmd)
 
@@ -57,17 +73,17 @@ class GentooInstall(object):
 def revert():
 	print("=> Removing logical volumes according to the new schema")
 	for e in gentoo.lvms:
-		print("- "+e.key)    
-		cmd = "lvremove -y /dev/"+gentoo.lvm_vg+"/"+e.key
+		print("- "+e.name)    
+		cmd = "lvremove -y /dev/"+gentoo.lvm_vg+"/"+e.name
 		gentoo.shell(cmd)
 	print("=> Removing volume group")
 	cmd = "vgremove -y "+gentoo.lvm_vg
 	gentoo.shell(cmd)
 	print("=> Removing physical volume")
-	cmd = "pvremove -y "+gentoo.lvm_pv
+	cmd = "pvremove -y "+gentoo.disk+str(gentoo.p_lvm)
 	gentoo.shell(cmd)
 
-def process():
+def preparing_disk():
 	print("#######################")
 	print("# Preparing the disks #")
 	print("#######################")
@@ -84,38 +100,55 @@ def process():
 	gentoo.shell(cmd)
 
 	print("=> Creating the physical volume")
-	cmd = "pvcreate -y "+gentoo.lvm_pv
+	cmd = "pvcreate -y "+gentoo.disk+str(gentoo.p_lvm)
 	gentoo.shell(cmd)
 	print("=> Creating the volume group")
-	cmd = "vgcreate -y "+gentoo.lvm_vg+" "+gentoo.lvm_pv
+	cmd = "vgcreate -y "+gentoo.lvm_vg+" "+gentoo.disk+str(gentoo.p_lvm)
 	gentoo.shell(cmd)
 	cmd = "vgchange -ay"
 	gentoo.shell(cmd)
 	print("=> Creating the logical volumes")
-	for e in gentoo.lvms:
-		print("+ "+e.key)    
-		cmd = "lvcreate -y "+e.value+" -n "+e.key+" "+gentoo.lvm_vg
+	for e in gentoo.lvms.list:
+		print("+ "+e.value.name)    
+		cmd = "lvcreate -y "+e.value.size+" -n "+e.value.name+" "+gentoo.lvm_vg
 		gentoo.shell(cmd)
 	print("=> Creating the filesystems")
-	print("** Creating EFI filesystem")
+	print("** EFI filesystem")
 	cmd = "mkfs.fat -F 32 "+gentoo.disk+str(gentoo.p_efi)
 	gentoo.shell(cmd)
-	print("** Creating BOOT filesystem")
+	print("** BOOT filesystem")
 	cmd = "mkfs.ext2 -F "+gentoo.disk+str(gentoo.p_boot)
 	gentoo.shell(cmd)
-	print("** Creating SWAP filesystem")
-	cmd = "mkswap /dev/"+gentoo.lvm_vg
+	for e in gentoo.lvms.list:
+		print("** "+e.key.upper()+" filesystem")
+		cmd = "mk"+e.value.fs+" -F /dev/"+gentoo.lvm_vg+"/"+e.value.name
+		gentoo.shell(cmd)
+		if e.value.fs == 'swap':
+			print("** Activating SWAP partition")
+			cmd = "swapon /dev/"+gentoo.lvm_vg+"/"+e.value.name
+			gentoo.shell(cmd)
+	print("=> Mounting the root partition")
+	e = gentoo.lvms.get('root')
+	cmd = "mount /dev/"+gentoo.lvm_vg+"/"+e.value.name+" /mnt/gentoo"
 	gentoo.shell(cmd)
-	
-	#echo -e "\t\t=> Activating the swap partition <="
-	#swapon /dev/gentoo/swapfs
-	#echo -e "\t=> Creating HOME filesystem /dev/gentoo/homefs (ext4) <="
-	#mkfs.ext4 -F /dev/gentoo/homefs
-	#echo -e "\t=> Creating ROOT filesystem /dev/gentoo/rootfs (ext4) <="
-	#mkfs.ext4 -F /dev/gentoo/rootfs
-	#echo -e "=> Mounting the root partition <="
-	#mount /dev/gentoo/rootfs /mnt/gentoo
-		
+# Installing a stage tarball
+def installing_satage():
+	print("##############################")
+	print("# Installing a stage tarball #")
+	print("##############################")
+	print("=> Setting the date and time")
+	cmd="ntpd -q -g"
+	gentoo.shell(cmd)
+	print("=> Entering /mnt/gentoo directory")
+	cmd = "cd /mnt/gentoo"
+	gentoo.shell(cmd)
+	print("=> Downloading stage")
+	cmd = "wget -c "+gentoo.stage
+	gentoo.shell(cmd)
+	print("=> Unpacking the stage tarball")
+	cmd = "tar xpvf stage3-*.tar.bz2 --xattrs-include='*.*' --numeric-owner"
+
 gentoo = GentooInstall()
 
-process()
+# preparing_disk()
+installing_satage()
