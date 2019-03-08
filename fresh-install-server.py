@@ -1,10 +1,11 @@
 from __future__ import print_function
-import subprocess
 import argparse
 import requests
 import multiprocessing
 from collections import OrderedDict
 import pprint
+from optparse import OptionParser
+import os, sys
 
 class TMap(object):
 	def __init__(self,key,value):
@@ -46,9 +47,13 @@ class GentooInstall(object):
 	def __init__(self):		 
 		self.version = "1.0.0"
 		self.dummy = True
+		self.timezone="US/Central"
+		self.locale="en_US.UTF-8 UTF-8"
 		self.rootdir = "/mnt/gentoo"
-		self.arch = "amd64"
-		self.cpus = multiprocessing.cpu_count()
+		self.arch = "amd64"		
+		self.cpuinfo = Map()
+		self.cpuinfo.put('cpus', multiprocessing.cpu_count())
+		self.cpuinfo.put('march', 'ivybridge')
 		self.repo="http://distfiles.gentoo.org/releases/"+self.arch+"/autobuilds/"
 		self.url_stage3 = self.repo+"latest-stage3-"+self.arch+".txt"
 		#################
@@ -82,7 +87,7 @@ class GentooInstall(object):
 	def shell(self,cmd):
 		print(cmd)
 		if not self.dummy:
-			subprocess.run(cmd, shell=True, executable='/bin/bash')
+			os.system(cmd)
 
 def preparing_disk_revert(option, opt, value, parser):
 	print("=> Reverting preparing disk")
@@ -160,20 +165,114 @@ def installing_stage(option, opt, value, parser):
 	print("=> Unpacking the stage tarball")
 	cmd = "tar xpvf "+gentoo.rootdir+"/stage3-*.tar.xz --xattrs-include='*.*' --numeric-owner -C "+gentoo.rootdir
 	gentoo.shell(cmd)
+	print("=> Updating parameter make.conf")
+	cmd = 'sed -i "/COMMON_FLAGS=/ s/=.*/=\\"-march='+gentoo.cpuinfo.get('march').value+' -O2 -pipe\\"/" /mnt/gentoo/etc/portage/make.conf'
+	gentoo.shell(cmd)
+	cmd = 'echo "MAKEOPTS=\\"-j'+str(gentoo.cpuinfo.get('cpus').value+1)+'\\"" >> /mnt/gentoo/etc/portage/make.conf'
+	gentoo.shell(cmd)
+def installing_base(option, opt, value, parser):
+	print("#####################################")
+	print("# Installing the Gentoo base system #")
+	print("#####################################")
+	print("=> Configuring the Gentoo ebuild repository")
+	print("** Creating the repos.conf directory")
+	cmd = "mkdir --parents /mnt/gentoo/etc/portage/repos.conf"
+	gentoo.shell(cmd)
+	print("** Copying the Gentoo repository configuration file provided by Portage")
+	cmd = "\\cp -lrv /mnt/gentoo/usr/share/portage/config/repos.conf /mnt/gentoo/etc/portage/repos.conf/gentoo.conf"
+	gentoo.shell(cmd)
+	print("** Copying DNS info")
+	cmd = "cp --dereference /etc/resolv.conf /mnt/gentoo/etc/"
+	gentoo.shell(cmd)
+	print("** Mounting the necessary filesystems")
+	cmd = "mount --types proc /proc /mnt/gentoo/proc"
+	gentoo.shell(cmd)
+	cmd = "mount --rbind /sys /mnt/gentoo/sys"
+	gentoo.shell(cmd)
+	cmd = "mount --make-rslave /mnt/gentoo/sys"
+	gentoo.shell(cmd)
+	cmd = "mount --rbind /dev /mnt/gentoo/dev"
+	gentoo.shell(cmd)
+	cmd = "mount --make-rslave /mnt/gentoo/dev"
+	gentoo.shell(cmd)
+	print("=> Entering the new environment")	
+	if not gentoo.dummy:
+		real_root = os.open("/mnt/gentoo", os.O_RDONLY)
+		os.chroot("/mnt/gentoo")
+		# Chrooted environment
+		# Put statements to be executed as chroot here
+		os.fchdir(real_root)
+		os.chroot(".")	
+	cmd = "source /etc/profile"
+	gentoo.shell(cmd)
+	cmd = 'export PS1="(chroot) ${PS1}"'
+	gentoo.shell(cmd)
+	print("=> Mounting the boot partition")
+	cmd = "mount "+gentoo.disk+str(gentoo.p_boot)+" /boot"
+	gentoo.shell(cmd)
+	if not os.path.isdir('/boot/efi'):
+		print("=> Creating efi directory")
+		cmd = "mkdir /boot/efi"
+		gentoo.shell(cmd)
+	print("=> Mounting the efi partition")
+	cmd = "mount "+gentoo.disk+str(gentoo.p_efi)+" /boot/efi"
+	gentoo.shell(cmd)
+	print("=> Updating the Gentoo ebuild repository")
+	cmd = "emerge --sync"
+	gentoo.shell(cmd)
+	print("=> Updating the @world set")
+	cmd = "emerge --ask --verbose --update --deep --newuse @world"
+	gentoo.shell(cmd)
+	print("=> Configuring Timezone")
+	cmd = 'echo "'+gentoo.timezone+'" > /etc/timezone'
+	gentoo.shell(cmd)
+	cmd = "emerge --config sys-libs/timezone-data"
+	gentoo.shell(cmd)
+	print("=> Configuring locales")
+	cmd = 'echo "'+gentoo.locale+'" >> /etc/locale.gen'
+	gentoo.shell(cmd)
+	cmd = "locale-gen"
+	gentoo.shell(cmd)
+	cmd = 'env-update && source /etc/profile && export PS1="(chroot) $PS1"'
+	gentoo.shell(cmd)
+def configure_kernel(option, opt, value, parser):
+	print("#####################################")
+	print("# Configuring the Linux kernel      #")
+	print("#####################################")
+	print("=> Installing the sources")
+	cmd = "emerge --ask sys-kernel/gentoo-sources"
+	gentoo.shell(cmd)
+	print("** Default: Manual configuration")
+	cmd = "cd /usr/src/linux"
+	gentoo.shell(cmd)
+	cmd = "make menuconfig"
+	gentoo.shell(cmd)
+	print("=> Compiling and installing")
+	cmd = "make && make modules_install"
+	gentoo.shell(cmd)
+	cmd = "make install"
+	gentoo.shell(cmd)
+	print("=> Building an initramfs")
+	cmd = "emerge --ask sys-kernel/genkernel"
+	gentoo.shell(cmd)
+	cmd = "genkernel --lvm --install initramfs"
+	gentoo.shell(cmd)
+def configure_kernel_automatically(option, opt, value, parser):
+	print("#####################################")
+	print("# Configuring the Linux kernel      #")
+	print("#####################################")	
+	print("=> Building an initramfs")
+	cmd = "emerge --ask sys-kernel/genkernel"
+	gentoo.shell(cmd)
+	cmd = "genkernel --lvm --install initramfs"
+	gentoo.shell(cmd)
 
 gentoo = GentooInstall()
 
-from optparse import OptionParser
 
 
 usage = "usage: %prog [options] arg"
 parser = OptionParser(usage)
-#parser.add_option("-f", "--file", dest="filename",
-#					help="read data from FILENAME")
-#parser.add_option("-v", "--verbose",
-#					action="store_true", dest="verbose")
-#parser.add_option("-q", "--quiet",
-#					action="store_false", dest="verbose")
 parser.add_option("-d", "--preparing-disk",
 					help="make partitions according to schema.",
 					action="callback",
@@ -186,51 +285,16 @@ parser.add_option("-i", "--install-stage",
 					help="installing stage3.",
 					action="callback",
 					callback=installing_stage)
-					
+parser.add_option("-I", "--install-base",
+					help="installing the Gentoo base system.",
+					action="callback",
+					callback=installing_base)
+parser.add_option("-k", "--kernel",
+					help="configuring & installing the Linux kernel manual",
+					action="callback",
+					callback=configure_kernel)
+parser.add_option("-K", "--kernel-auto",
+					help="configuring & installing the Linux kernel automatic",
+					action="callback",
+					callback=configure_kernel_automatically)																			
 (options, args) = parser.parse_args()
-
-
-
-#parser = argparse.ArgumentParser(description='Gentoo AMD64 Handbook :: Basic Install Process')
-
-#parser.add_argument('--preparing-disk',
-#					default='10', type=int, nargs=1,
-#                    help='To be able to install Gentoo, the necessary partitions need to be created.')
-#parser.add_argument('--preparing-disk',
-#					'-pdsk',
-#					help='To be able to install Gentoo, the necessary partitions need to be created.',
-#					action="count")
-#parser.add_argument('--verbose', '-v', action='count')
-#
-#args = parser.parse_args()
-
-
-# preparing_disk()
-# installing_satage()
-
-
-def cpuinfo():
- cpuinfo=OrderedDict()
- procinfo=OrderedDict()
- nprocs = 0
- with open('/proc/cpuinfo') as f:
-  for line in f:
-   if not line.strip():
-    cpuinfo['proc%s' % nprocs] = procinfo
-    nprocs=nprocs+1
-    procinfo=OrderedDict()
-   else:
-    if len(line.split(':')) == 2:
-     procinfo[line.split(':')[0].strip()] = line.split(':')[1].strip()
-    else:
-     procinfo[line.split(':')[0].strip()] = ''
- return cpuinfo
-
-cpuinfo = cpuinfo()['proc0']
-print(cpuinfo)
-
-
-print("Vendor ID: "+cpuinfo['vendor_id']) 
-print("CPU family: "+cpuinfo['cpu family']) 
-print("Model: "+cpuinfo['model']) 
-print("Model name: "+cpuinfo['model name']) 
