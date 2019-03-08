@@ -50,7 +50,9 @@ class GentooInstall(object):
 		self.timezone="US/Central"
 		self.locale="en_US.UTF-8 UTF-8"
 		self.rootdir = "/mnt/gentoo"
-		self.arch = "amd64"		
+		self.hostname = "gentoo"
+		self.domain = "mudnetworks.net"
+		self.arch = "amd64"
 		self.cpuinfo = Map()
 		self.cpuinfo.put('cpus', multiprocessing.cpu_count())
 		self.cpuinfo.put('march', 'ivybridge')
@@ -82,8 +84,24 @@ class GentooInstall(object):
 		self.lvms.put('swap', TLV('swapfs','-L 8G','swap') )
 		self.lvms.put('home', TLV('homefs','-L 8G','fs.ext4') )
 		self.lvms.put('root', TLV('rootfs','-l 100%VG','fs.ext4') )
-		
-		
+	def chroot(self):
+		print("=> Entering the new environment")	
+		if not self.dummy:
+			self.real_root = os.open("/mnt/gentoo", os.O_RDONLY)
+			os.chroot("/mnt/gentoo")
+			# Chrooted environment
+			# Put statements to be executed as chroot here
+			os.fchdir(self.real_root)
+			os.chroot(".")
+	def close_chroot(self):
+		print("=> Leaving the new environment")	
+		if not self.dummy:			
+			os.close(self.real_root)
+	def awk_add_update(self,key,value,filename):
+		print("=> Adding and/or replacing value into file "+filename)		
+		cmd = "awk -v s="+key+"="+value+" '/^"+key+"=/{$0=s;f=1} {a[++n]=$0} END{if(!f)a[++n]=s;for(i=1;i<=n;i++)print a[i]>ARGV[1]}' "+filename
+		self.shell(cmd)
+
 	def shell(self,cmd):
 		print(cmd)
 		if not self.dummy:
@@ -166,10 +184,18 @@ def installing_stage(option, opt, value, parser):
 	cmd = "tar xpvf "+gentoo.rootdir+"/stage3-*.tar.xz --xattrs-include='*.*' --numeric-owner -C "+gentoo.rootdir
 	gentoo.shell(cmd)
 	print("=> Updating parameter make.conf")
-	cmd = 'sed -i "/COMMON_FLAGS=/ s/=.*/=\\"-march='+gentoo.cpuinfo.get('march').value+' -O2 -pipe\\"/" /mnt/gentoo/etc/portage/make.conf'
-	gentoo.shell(cmd)
-	cmd = 'echo "MAKEOPTS=\\"-j'+str(gentoo.cpuinfo.get('cpus').value+1)+'\\"" >> /mnt/gentoo/etc/portage/make.conf'
-	gentoo.shell(cmd)
+	gentoo.awk_add_update(
+		"COMMON_FLAGS",
+		"\\\"-march="+gentoo.cpuinfo.get('march').value+" -02 -pipe \\\"",
+		"/mnt/gentoo/etc/portage/make.conf")
+	gentoo.awk_add_update(
+		"MAKEOPTS",
+		"\\\"-j"+str(gentoo.cpuinfo.get('cpus').value+1)+"\\\"",
+		"/mnt/gentoo/etc/portage/make.conf")
+	gentoo.awk_add_update(
+		"GRUB_PLATFORMS",
+		"\\\"efi-64\\\"",
+		"/mnt/gentoo/etc/portage/make.conf")
 def installing_base(option, opt, value, parser):
 	print("#####################################")
 	print("# Installing the Gentoo base system #")
@@ -195,14 +221,7 @@ def installing_base(option, opt, value, parser):
 	gentoo.shell(cmd)
 	cmd = "mount --make-rslave /mnt/gentoo/dev"
 	gentoo.shell(cmd)
-	print("=> Entering the new environment")	
-	if not gentoo.dummy:
-		real_root = os.open("/mnt/gentoo", os.O_RDONLY)
-		os.chroot("/mnt/gentoo")
-		# Chrooted environment
-		# Put statements to be executed as chroot here
-		os.fchdir(real_root)
-		os.chroot(".")	
+	gentoo.chroot()	
 	cmd = "source /etc/profile"
 	gentoo.shell(cmd)
 	cmd = 'export PS1="(chroot) ${PS1}"'
@@ -235,11 +254,13 @@ def installing_base(option, opt, value, parser):
 	gentoo.shell(cmd)
 	cmd = 'env-update && source /etc/profile && export PS1="(chroot) $PS1"'
 	gentoo.shell(cmd)
+	
 def configure_kernel(option, opt, value, parser):
 	print("#####################################")
 	print("# Configuring the Linux kernel      #")
 	print("#####################################")
-	print("=> Installing the sources")
+	gentoo.chroot()
+	print("=> Installing Gentoo sources")
 	cmd = "emerge --ask sys-kernel/gentoo-sources"
 	gentoo.shell(cmd)
 	print("** Default: Manual configuration")
@@ -252,20 +273,103 @@ def configure_kernel(option, opt, value, parser):
 	gentoo.shell(cmd)
 	cmd = "make install"
 	gentoo.shell(cmd)
-	print("=> Building an initramfs")
+	print("=> Installing Genkernel")
 	cmd = "emerge --ask sys-kernel/genkernel"
 	gentoo.shell(cmd)
+	print("=> Building an initramfs")
 	cmd = "genkernel --lvm --install initramfs"
 	gentoo.shell(cmd)
+	print("=> Leaving chroot")
+	gentoo.close_chroot()
 def configure_kernel_automatically(option, opt, value, parser):
 	print("#####################################")
 	print("# Configuring the Linux kernel      #")
 	print("#####################################")	
-	print("=> Building an initramfs")
-	cmd = "emerge --ask sys-kernel/genkernel"
+	gentoo.chroot()
+	print("=> Executing etc-update for merge configuration")
+	cmd = "etc-update"
 	gentoo.shell(cmd)
+	print("=> Installing Gentoo sources")
+	cmd = "emerge --ask sys-kernel/gentoo-sources"
+	gentoo.shell(cmd)
+	print("=> Installing Genkernel")
+	cmd = "emerge --ask sys-kernel/genkernel"
+	print("** Alternative: Using genkernel")
+	gentoo.shell(cmd)
+	cmd = "genkernel all"
+	gentoo.shell(cmd)
+	print("=> Installing firmware")
+	cmd = "emerge --ask sys-kernel/linux-firmware"
+	gentoo.shell(cmd)
+	gentoo.close_chroot()
+def configure_system(option, opt, value, parser):
+	print("#####################################")
+	print("# Configuring the system      #")
+	print("#####################################")
+	gentoo.chroot()
+	print("=> Networking information")
+	print("** Host and domain information")
+	gentoo.awk_add_update(
+		"hostname",
+		"\\\""+gentoo.hostname+"\\\"",
+		"/etc/conf.d/hostname")		
+	if not os.path.isfile('/etc/conf.d/net'):
+		print("** Creating file /etc/conf.d/net")
+		cmd = 'echo "# File created by BFurther Gentoo Instal" > /etc/conf.d/net'
+	gentoo.awk_add_update(
+		"dns_domain_lo",
+		"\\\""+gentoo.domain+"\\\"",
+		"/etc/conf.d/net")
+	print("=> Installing system tools")
+	print("** Installing system logger")
+	cmd = "emerge --ask app-admin/sysklogd"
+	gentoo.shell(cmd)
+	cmd = "rc-update add sysklogd default"
+	gentoo.shell(cmd)
+	print("** Installing cron daemon")
+	cmd = "emerge --ask sys-process/cronie"
+	gentoo.shell(cmd)
+	cmd = "rc-update add cronie default"
+	gentoo.shell(cmd)
+	print("** Installing file indexing")
+	cmd = "emerge --ask sys-apps/mlocate"
+	gentoo.shell(cmd)
+	print("** Enabling remote access")
+	cmd = "rc-update add sshd default"
+	gentoo.shell(cmd)
+	print("** Installing filesystem tools")
+	cmd = "emerge --ask sys-fs/lvm2"
+	gentoo.shell(cmd)
+	cmd = "rc-update add lvm boot"
+	gentoo.shell(cmd)
+	cmd = "emerge --ask	sys-fs/e2fsprogs"
+	gentoo.shell(cmd)
+	cmd = "emerge --ask sys-fs/dosfstools"
+	gentoo.shell(cmd)	
+	# BOOTLOADER - GRUB2	
+	print("=> Configuring the bootloader")
 	cmd = "genkernel --lvm --install initramfs"
 	gentoo.shell(cmd)
+	print("** Installing GRUB2")
+	cmd = "echo 'sys-boot/grub:2 device-mapper' >> /etc/portage/package.use/package.use"
+	gentoo.shell(cmd)
+	cmd = "emerge --ask --verbose sys-boot/grub:2"
+	gentoo.shell(cmd)	
+	cmd = "mount -o remount,rw /sys/firmware/efi/efivars"
+	gentoo.shell(cmd)	
+	cmd = "grub-install --target=x86_64-efi --efi-directory=/boot/efi"
+	gentoo.shell(cmd)
+	gentoo.awk_add_update(
+		"GRUB_CMDLINE_LINUX",
+		"\\\"dolvm\\\"",
+		"/etc/default/grub")
+	cmd = "grub-mkconfig -o /boot/grub/grub.cfg"
+	gentoo.shell(cmd)
+	print("=> Set root password")
+	cmd = "passwd"
+	gentoo.shell(cmd)
+	
+	gentoo.close_chroot()
 
 gentoo = GentooInstall()
 
@@ -296,5 +400,9 @@ parser.add_option("-k", "--kernel",
 parser.add_option("-K", "--kernel-auto",
 					help="configuring & installing the Linux kernel automatic",
 					action="callback",
-					callback=configure_kernel_automatically)																			
+					callback=configure_kernel_automatically)
+parser.add_option("-c", "--configure-system",
+					help="configuring the system",
+					action="callback",
+					callback=configure_system)					
 (options, args) = parser.parse_args()
