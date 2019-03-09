@@ -296,7 +296,7 @@ def configure_kernel_automatically(option, opt, value, parser):
 	cmd = "emerge --ask sys-kernel/genkernel"
 	print("** Alternative: Using genkernel")
 	gentoo.shell(cmd)
-	cmd = "genkernel all"
+	cmd = "genkernel --lvm --mdadm --install initramfs --menuconfig all"
 	gentoo.shell(cmd)
 	print("=> Installing firmware")
 	cmd = "emerge --ask sys-kernel/linux-firmware"
@@ -345,7 +345,10 @@ def configure_system(option, opt, value, parser):
 	cmd = "emerge --ask	sys-fs/e2fsprogs"
 	gentoo.shell(cmd)
 	cmd = "emerge --ask sys-fs/dosfstools"
-	gentoo.shell(cmd)	
+	gentoo.shell(cmd)
+	cmd = "emerge --ask net-misc/dhcpcd"
+	gentoo.shell(cmd)
+
 	# BOOTLOADER - GRUB2	
 	print("=> Configuring the bootloader")
 	cmd = "genkernel --lvm --install initramfs"
@@ -354,7 +357,9 @@ def configure_system(option, opt, value, parser):
 	cmd = "echo 'sys-boot/grub:2 device-mapper' >> /etc/portage/package.use/package.use"
 	gentoo.shell(cmd)
 	cmd = "emerge --ask --verbose sys-boot/grub:2"
-	gentoo.shell(cmd)	
+	gentoo.shell(cmd)
+	cmd = "emerge --ask --verbose sys-libs/efivar"
+	gentoo.shell(cmd)
 	cmd = "mount -o remount,rw /sys/firmware/efi/efivars"
 	gentoo.shell(cmd)	
 	cmd = "grub-install --target=x86_64-efi --efi-directory=/boot/efi"
@@ -368,7 +373,8 @@ def configure_system(option, opt, value, parser):
 	print("=> Set root password")
 	cmd = "passwd"
 	gentoo.shell(cmd)
-	
+	print()
+	cmd = 'useradd -m -G users,wheel,audio -s /bin/bash -c "Alexander Villalobos Yadro" avillalobos'
 	gentoo.close_chroot()
 
 gentoo = GentooInstall()
